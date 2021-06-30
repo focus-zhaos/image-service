@@ -323,16 +323,23 @@ pub trait NydusDaemon: DaemonStateMachineSubscriber {
     // NOTE: This method is not thread-safe, however, it is acceptable as
     // mount/umount/remount/restore_mount is invoked from single thread in FSM
     fn mount(&self, cmd: FsBackendMountCmd) -> DaemonResult<()> {
+        // 检查mountpoint路径上是否已经挂载了后端文件系统
         if self.backend_from_mountpoint(&cmd.mountpoint)?.is_some() {
             return Err(DaemonError::AlreadyExists);
         }
+        // 打开（bootsrap或shared_dir）后端路径，获取文件描述符
+        // 初始化backend结构（rafs或passthroughfs结构）
         let backend = fs_backend_factory(&cmd)?;
+        // 这个字面理解就是吧上一步获取的backend挂载到虚拟化挂载点
         let index = self.get_vfs().mount(backend, &cmd.mountpoint)?;
+        // 这个输出感觉要区分rafs和passthroughfs的情况。
         info!("rafs mounted at {}", &cmd.mountpoint);
+        // 清洗输入配置，仅对rafs有效
         self.backend_collection().add(&cmd.mountpoint, &cmd)?;
 
         // Add mounts opaque to UpgradeManager
         if let Some(mut mgr_guard) = self.upgrade_mgr() {
+            // 啥也没干
             upgrade::add_mounts_state(&mut mgr_guard, cmd, index)?;
         }
 
@@ -426,6 +433,7 @@ fn fs_backend_factory(cmd: &FsBackendMountCmd) -> DaemonResult<BackFileSystem> {
             // TODO: Passthrough Fs needs to enlarge rlimit against host. We can exploit `MountCmd`
             // `config` field to pass such a configuration into here.
             let passthrough_fs = PassthroughFs::new(fs_cfg).map_err(DaemonError::PassthroughFs)?;
+            // 打开shared_dir目录的文件夹
             passthrough_fs
                 .import()
                 .map_err(DaemonError::PassthroughFs)?;
@@ -554,6 +562,7 @@ impl DaemonStateMachineContext {
         thread::Builder::new()
             .name("state_machine".to_string())
             .spawn(move || loop {
+                // statemachine起线程死循环接受virtiofsdaemon的数据？啥数据
                 use DaemonStateMachineOutput::*;
                 let event = self
                     .event_collector
@@ -583,6 +592,7 @@ impl DaemonStateMachineContext {
                     "State machine(pid={}): from {:?} to {:?}, input [{:?}], output [{:?}]",
                     &self.pid, last, cur, input, &action
                 );
+                // statemachine收到daemon的请求action来启动服务
                 let r = match action {
                     Some(a) => match a {
                         StartService => d.start().map(|r| {

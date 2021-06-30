@@ -288,8 +288,11 @@ fn main() -> Result<()> {
     // shared-dir means fs passthrough
     let shared_dir = cmd_arguments_parsed.value_of("shared-dir");
     // bootstrap means rafs only
+    // 感觉bootstrap仅仅是rafs系统元数据存储的后端位置，它是个文件file，跟shared_dir是一个目录path不一样。
+    // 且rafs实现中貌似也不存在文件操作的接口，类似于open/mkdir这种
     let bootstrap = cmd_arguments_parsed.value_of("bootstrap");
     // safe as virtual_mountpoint default to "/"
+    // 这个虚拟挂载点是啥玩意？感觉还是对于后端的shared-dir和bootstrap来说的，
     let virtual_mnt = cmd_arguments_parsed.value_of("virtual-mountpoint").unwrap();
     // apisock means admin api socket support
     let apisock = cmd_arguments_parsed.value_of("apisock");
@@ -320,6 +323,7 @@ fn main() -> Result<()> {
 
         Some(cmd)
     } else if let Some(b) = bootstrap {
+        //就是说bootstrap的处理会比shared-dir多个读config文件以及prefetch的过程。
         let config = cmd_arguments_parsed.value_of("config").ok_or_else(|| {
             DaemonError::InvalidArguments("config file is not provided".to_string())
         })?;

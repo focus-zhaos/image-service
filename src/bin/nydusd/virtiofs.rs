@@ -304,6 +304,9 @@ pub fn create_nydus_daemon(
     )
     .map_err(|e| DaemonError::DaemonFailure(format!("{:?}", e)))?;
 
+    // nydusd创建了俩channel组成一个双工信道
+    // 俩端点分别是 StateMachine <--> virtiofsDaemon
+
     let (trigger, events_rx) = channel::<DaemonStateMachineInput>();
     let (result_sender, result_receiver) = channel::<DaemonResult<()>>();
 
@@ -322,7 +325,8 @@ pub fn create_nydus_daemon(
 
     let machine = DaemonStateMachineContext::new(daemon.clone(), events_rx, result_sender);
     machine.kick_state_machine()?;
-
+    
+    // 挂载的步骤处理的是daemon.vfs
     if let Some(cmd) = mount_cmd {
         daemon.mount(cmd)?;
     }
