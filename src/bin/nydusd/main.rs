@@ -56,6 +56,8 @@ mod api_server_glue;
 mod upgrade;
 use api_server_glue::{ApiServer, ApiSeverSubscriber};
 
+pub const BACKEND_MOUNT_MES_FILE: &str = "/dev/shm/MountMessage";
+
 lazy_static! {
     static ref EVENT_MANAGER_RUN: AtomicBool = AtomicBool::new(true);
     static ref EXIT_EVTFD: Mutex::<Option<EventFd>> = Mutex::<Option<EventFd>>::default();
@@ -201,7 +203,7 @@ fn main() -> Result<()> {
                 .help("Assigned ID to identify a daemon")
                 .takes_value(true)
                 .required(false)
-                .requires("supervisor")
+                // .requires("supervisor")
                 .global(true),
         )
         .arg(
@@ -227,6 +229,14 @@ fn main() -> Result<()> {
                 .help("Mount bootstrap or shared-dir (if provided) to specificed virtual mountpoint")
                 .takes_value(true)
                 .default_value("/")
+                .required(false)
+                .global(true),
+        )
+        .arg(
+            Arg::with_name("reconnect")
+                .long("reconnect")
+                .help("whether to restore from crash")
+                .takes_value(false)
                 .required(false)
                 .global(true),
         );
@@ -302,6 +312,17 @@ fn main() -> Result<()> {
         .map(|n| n.parse().unwrap_or(rlimit_nofile_default))
         .unwrap_or(rlimit_nofile_default);
 
+    // Basically, below two arguments are essential for live-upgrade/failover/ and external management.
+    let daemon_id = cmd_arguments_parsed.value_of("id").map(|id| id.to_string());
+    let supervisor = cmd_arguments_parsed
+        .value_of("supervisor")
+        .map(|s| s.to_string());
+
+    let is_reconnect = cmd_arguments_parsed.is_present("reconnect");
+    if is_reconnect {
+        info!("Crash recovery");
+    }
+
     let vfs = Vfs::new(VfsOptions::default());
     let mount_cmd = if let Some(shared_dir) = shared_dir {
         info!(
@@ -319,6 +340,7 @@ fn main() -> Result<()> {
             config: "".to_string(),
             mountpoint: virtual_mnt.to_string(),
             prefetch_files: None,
+            is_reconnect: Some(is_reconnect),
         };
 
         Some(cmd)
@@ -341,6 +363,7 @@ fn main() -> Result<()> {
             config: std::fs::read_to_string(config)?,
             mountpoint: virtual_mnt.to_string(),
             prefetch_files,
+            is_reconnect: None,
         };
 
         Some(cmd)
@@ -356,19 +379,13 @@ fn main() -> Result<()> {
     let exit_evtfd = daemon_subscriber.get_event_fd()?;
     event_manager.add_subscriber(daemon_subscriber);
 
-    // Basically, below two arguments are essential for live-upgrade/failover/ and external management.
-    let daemon_id = cmd_arguments_parsed.value_of("id").map(|id| id.to_string());
-    let supervisor = cmd_arguments_parsed
-        .value_of("supervisor")
-        .map(|s| s.to_string());
-
     #[cfg(feature = "virtiofs")]
     let daemon = {
         // sock means vhost-user-backend only
         let vu_sock = cmd_arguments_parsed.value_of("sock").ok_or_else(|| {
             DaemonError::InvalidArguments("vhost socket must be provided!".to_string())
         })?;
-        create_nydus_daemon(daemon_id, supervisor, vu_sock, vfs, mount_cmd, bti)?
+        create_nydus_daemon(daemon_id, supervisor, vu_sock, vfs, mount_cmd, bti, is_reconnect)?
     };
     #[cfg(feature = "fusedev")]
     let daemon = {

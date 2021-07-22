@@ -3,10 +3,10 @@ TEST_WORKDIR_PREFIX ?= "/tmp"
 current_dir := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 
 build: build-virtiofs build-fusedev
-	cargo fmt -- --check
+	cargo fmt -- 
 
 release: build-virtiofs-release build-fusedev-release
-	cargo fmt -- --check
+	cargo fmt -- 
 
 build-virtiofs:
 	# TODO: switch to --out-dir when it moves to stable

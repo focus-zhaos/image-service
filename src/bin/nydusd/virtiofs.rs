@@ -6,11 +6,15 @@
 
 use std::any::Any;
 use std::io::Result;
+use std::io::{Write, BufRead, BufReader};
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use std::sync::{
     mpsc::{channel, Receiver},
     Arc, Mutex, MutexGuard, RwLock,
 };
 use std::thread;
+use std::str::FromStr;
 
 use libc::EFD_NONBLOCK;
 
@@ -80,11 +84,18 @@ impl VhostUserFsBackend {
 
         while let Some(avail_desc) = vring.mut_queue().iter(mem).next() {
             let head_index = avail_desc.index();
+            info!("head_index is {}", head_index);
             let reader = Reader::new(mem, avail_desc.clone())
                 .map_err(DaemonError::InvalidDescriptorChain)?;
             let writer =
                 Writer::new(mem, avail_desc).map_err(DaemonError::InvalidDescriptorChain)?;
-
+            info!("crash point 1 ");
+            unsafe {
+                info!("log header addr: 0x{:X}", vring.mut_queue().log_header.unwrap() as usize);
+                info!("used idx : {}", (*(vring.mut_queue().log_header.unwrap())).used_idx);
+                info!("desc num : {}", (*(vring.mut_queue().log_header.unwrap())).desc_num);
+                info!("desc  : 0x{:X}", (*(vring.mut_queue().log_header.unwrap())).desc);
+            }
             let total = self
                 .server
                 .handle_message(
@@ -96,11 +107,24 @@ impl VhostUserFsBackend {
                     None,
                 )
                 .map_err(DaemonError::ProcessQueue)?;
-
+            info!("crash point 2 ");
+            unsafe {
+                info!("log header addr: 0x{:X}", vring.mut_queue().log_header.unwrap() as usize);
+                info!("used idx : {}", (*(vring.mut_queue().log_header.unwrap())).used_idx);
+                info!("desc num : {}", (*(vring.mut_queue().log_header.unwrap())).desc_num);
+                info!("desc  : 0x{:X}", (*(vring.mut_queue().log_header.unwrap())).desc);
+            }
             self.used_descs.push((head_index, total as u32));
         }
-
+        info!("crash point 3 ");
+        unsafe {
+            info!("log header addr: 0x{:X}", vring.mut_queue().log_header.unwrap() as usize);
+            info!("used idx : {}", (*(vring.mut_queue().log_header.unwrap())).used_idx);
+            info!("desc num : {}", (*(vring.mut_queue().log_header.unwrap())).desc_num);
+            info!("desc  : 0x{:X}", (*(vring.mut_queue().log_header.unwrap())).desc);
+        }
         if !self.used_descs.is_empty() {
+            info!("used_descs: {:?}", self.used_descs);
             for (desc_index, data_sz) in &self.used_descs {
                 trace!(
                     "used desc index {} bytes {} total_used {}",
@@ -132,7 +156,7 @@ impl VhostUserBackend for VhostUserFsBackendHandler {
     }
 
     fn protocol_features(&self) -> VhostUserProtocolFeatures {
-        VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::SLAVE_REQ
+        VhostUserProtocolFeatures::MQ | VhostUserProtocolFeatures::SLAVE_REQ | VhostUserProtocolFeatures::INFLIGHT_SHMFD
     }
 
     fn set_event_idx(&mut self, _enabled: bool) {}
@@ -297,10 +321,12 @@ pub fn create_nydus_daemon(
     vfs: Arc<Vfs>,
     mount_cmd: Option<FsBackendMountCmd>,
     bti: BuildTimeInfo,
+    is_restore: bool,
 ) -> Result<Arc<dyn NydusDaemon + Send>> {
     let vu_daemon = VhostUserDaemon::new(
         String::from("vhost-user-fs-backend"),
         Arc::new(RwLock::new(VhostUserFsBackendHandler::new(vfs.clone())?)),
+        is_restore,
     )
     .map_err(|e| DaemonError::DaemonFailure(format!("{:?}", e)))?;
 
@@ -325,12 +351,68 @@ pub fn create_nydus_daemon(
 
     let machine = DaemonStateMachineContext::new(daemon.clone(), events_rx, result_sender);
     machine.kick_state_machine()?;
-    
-    // 挂载的步骤处理的是daemon.vfs
+
     if let Some(cmd) = mount_cmd {
         daemon.mount(cmd)?;
     }
 
+    if is_restore {
+        // restore all mountpoint from BACKEND_MOUNT_MESSAGE_FILE
+        let mount_mes_filename = format!(
+            "/dev/shm/MountMessage-{}", 
+            daemon.id().expect("unwrap string failed"),
+        );
+
+        let file = File::open(Path::new(&mount_mes_filename)).expect("Open backend file failed");
+        let reader = BufReader::new(file);
+        for line_res in reader.lines() {
+            let line = line_res?;
+            // println!("{:?}", line);
+            let info_vec: Vec<&str> = line.split(' ').collect();
+            info!("restore message: {:?}", info_vec);
+            let perfetch_mes = if info_vec.len() > 4 {
+                let mut str_arr = Vec::<String>::new();
+                for mes in info_vec.iter().skip(4) {
+                    str_arr.push(mes.to_string());
+                }
+                info!("perfetch files : {:?}", str_arr.clone());
+                Some(str_arr)
+            }else {
+                None
+            };
+            daemon.mount(
+                FsBackendMountCmd {
+                    fs_type: super::daemon::FsBackendType::from_str(info_vec[0])?,
+                    mountpoint: info_vec[1].to_string(),
+                    config: info_vec[2].to_string(),
+                    source: info_vec[3].to_string(),
+                    prefetch_files: perfetch_mes,
+                    is_reconnect: None,
+                }
+            )?;
+        }
+    }
+    
+    /*
+    if is_restore {
+        daemon.mount(FsBackendMountCmd {
+            fs_type: super::daemon::FsBackendType::PassthroughFs,
+            mountpoint: "/foo1".to_string(),
+            config: "".to_string(),
+            source: "/home/zhaosheng.ste/shared-dir".to_string(),
+            prefetch_files: None,
+            is_reconnect: None,
+        })?;
+        daemon.mount(FsBackendMountCmd {
+            fs_type: super::daemon::FsBackendType::Rafs,
+            mountpoint: "/bar1".to_string(),
+            config: "{\"device\":{\"backend\":{\"type\":\"localfs\",\"config\":{\"dir\":\"blobs\"}},\"cache\":{\"type\":\"blobcache\",\"config\":{\"work_dir\":\"cache\"}}},\"mode\":\"direct\",\"digest_validate\":true}".to_string(),
+            source: "/home/zhaosheng.ste/nydus-static/tmp/bootstraps/4-sha256:efe790ac151b1ea4c0b89f012dd797d5c4206c0a47b01f4da52a9c60511d3fb7".to_string(),
+            prefetch_files: None,
+            is_reconnect: None,
+        })?;
+    }
+    */
     // TODO: In fact, for virtiofs, below event triggers virtio-queue setup and some other
     // preparation/connection work. So this event name `Mount` might not be suggestive.
     // I'd like to rename it someday.

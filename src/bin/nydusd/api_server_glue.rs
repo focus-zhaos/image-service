@@ -7,7 +7,9 @@ use std::convert::From;
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
-
+use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use event_manager::{EventOps, EventSubscriber, Events};
 use nix::sys::signal::{kill, SIGTERM};
 use nix::unistd::Pid;
@@ -31,6 +33,8 @@ pub struct ApiServer {
 }
 
 type Result<T> = ApiResult<T>;
+
+pub const BACKEND_MOUNT_MES_FILE: &str = "/dev/shm/MountMessage";
 
 impl From<DaemonError> for DaemonErrorKind {
     fn from(e: DaemonError) -> Self {
@@ -240,6 +244,43 @@ impl ApiServer {
     fn do_mount(&self, mountpoint: String, cmd: ApiMountCmd) -> ApiResponse {
         let fs_type =
             FsBackendType::from_str(&cmd.fs_type).map_err(|e| ApiError::MountFailure(e.into()))?;
+        
+        info!("{:?}", cmd);
+        // persist mount parameter information
+        let mount_mes_filename = format!(
+            "{}-{}", 
+            BACKEND_MOUNT_MES_FILE.to_string(), 
+            self.daemon.id().expect("unwrap string failed"),
+        );
+
+        let mut persist_message = format!(
+            "{} {} {} {}",
+            cmd.fs_type,
+            mountpoint,
+            cmd.config,
+            cmd.source,
+        );
+        
+        if let Some(perfertch_message) = cmd.prefetch_files.clone() {
+            for mes in &perfertch_message {
+                persist_message = format!(
+                    "{} {}",
+                    persist_message,
+                    mes,
+                );
+            }
+        }
+
+        persist_message += "\n";
+
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(Path::new(&mount_mes_filename))
+            .expect("Open File Error");
+        
+        file.write(persist_message.as_bytes());
+
         self.daemon
             .mount(FsBackendMountCmd {
                 fs_type,
@@ -247,6 +288,7 @@ impl ApiServer {
                 config: cmd.config,
                 source: cmd.source,
                 prefetch_files: cmd.prefetch_files,
+                is_reconnect: None,
             })
             .map(|_| ApiResponsePayload::Empty)
             .map_err(|e| ApiError::MountFailure(e.into()))
@@ -262,6 +304,7 @@ impl ApiServer {
                 config: cmd.config,
                 source: cmd.source,
                 prefetch_files: cmd.prefetch_files,
+                is_reconnect: None,
             })
             .map(|_| ApiResponsePayload::Empty)
             .map_err(|e| ApiError::MountFailure(e.into()))

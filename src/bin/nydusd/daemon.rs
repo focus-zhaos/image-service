@@ -197,6 +197,7 @@ pub struct DaemonInfo {
     pub backend_collection: FsBackendCollection,
 }
 
+// 添加属性表示是否是reconnect
 #[derive(Clone)]
 pub struct FsBackendMountCmd {
     pub fs_type: FsBackendType,
@@ -204,6 +205,7 @@ pub struct FsBackendMountCmd {
     pub config: String,
     pub mountpoint: String,
     pub prefetch_files: Option<Vec<String>>,
+    pub is_reconnect: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
@@ -327,13 +329,15 @@ pub trait NydusDaemon: DaemonStateMachineSubscriber {
         if self.backend_from_mountpoint(&cmd.mountpoint)?.is_some() {
             return Err(DaemonError::AlreadyExists);
         }
+        println!("mount 0 {}", io::Error::last_os_error());
         // 打开（bootsrap或shared_dir）后端路径，获取文件描述符
         // 初始化backend结构（rafs或passthroughfs结构）
-        let backend = fs_backend_factory(&cmd)?;
+        let backend = fs_backend_factory(&cmd, self.id().unwrap())?;
         // 这个字面理解就是吧上一步获取的backend挂载到虚拟化挂载点
+        println!("mount 1 {}", io::Error::last_os_error());
         let index = self.get_vfs().mount(backend, &cmd.mountpoint)?;
         // 这个输出感觉要区分rafs和passthroughfs的情况。
-        info!("rafs mounted at {}", &cmd.mountpoint);
+        info!("backend FS mounted at {}", &cmd.mountpoint);
         // 清洗输入配置，仅对rafs有效
         self.backend_collection().add(&cmd.mountpoint, &cmd)?;
 
@@ -408,7 +412,7 @@ fn input_prefetch_files_verify(input: &Option<Vec<String>>) -> DaemonResult<Opti
 
     Ok(prefetch_files)
 }
-fn fs_backend_factory(cmd: &FsBackendMountCmd) -> DaemonResult<BackFileSystem> {
+fn fs_backend_factory(cmd: &FsBackendMountCmd, daemon_id: String) -> DaemonResult<BackFileSystem> {
     let prefetch_files = input_prefetch_files_verify(&cmd.prefetch_files)?;
     match cmd.fs_type {
         FsBackendType::Rafs => {
@@ -428,15 +432,36 @@ fn fs_backend_factory(cmd: &FsBackendMountCmd) -> DaemonResult<BackFileSystem> {
                 do_import: false,
                 writeback: true,
                 no_open: true,
+                xattr: true,
                 ..Default::default()
             };
+
             // TODO: Passthrough Fs needs to enlarge rlimit against host. We can exploit `MountCmd`
             // `config` field to pass such a configuration into here.
-            let passthrough_fs = PassthroughFs::new(fs_cfg).map_err(DaemonError::PassthroughFs)?;
-            // 打开shared_dir目录的文件夹
-            passthrough_fs
-                .import()
+            let passthrough_fs = PassthroughFs::new(fs_cfg, daemon_id)
                 .map_err(DaemonError::PassthroughFs)?;
+            
+            // let need_rec = PassthroughFs::is_restore(&(cmd.daemon_id.clone().unwrap()));
+            let is_restore = if let Some(rec) = cmd.is_reconnect {
+                rec
+            }else {
+                false
+            };
+            // 打开shared_dir目录的文件夹
+            info!("before restore {}", io::Error::last_os_error());
+            match is_restore || passthrough_fs.is_restore {
+                true => {
+                    info!("backend FS restore");
+                    passthrough_fs.restore();
+                }
+                false => {
+                    info!("backend FS init");
+                    passthrough_fs
+                        .import()
+                        .map_err(DaemonError::PassthroughFs)?;
+                    // TODO(zhaosheng): 1. 初始化后端文件
+                }
+            }
             info!("PassthroughFs imported");
             Ok(Box::new(passthrough_fs))
         }
@@ -663,6 +688,7 @@ mod tests {
                     mountpoint: "testmonutount".to_string(),
                     source: "testsource".to_string(),
                     prefetch_files: Some(vec!["testfile".to_string()]),
+                    is_reconnect: None,
                 },
             )
             .is_err()
@@ -724,7 +750,8 @@ mod tests {
             mountpoint: "testmountpoint".to_string(),
             source: bootstrap.to_string(),
             prefetch_files: Some(vec!["/testfile".to_string()]),
-        })
+            is_reconnect: None,
+        }, "test".to_string())
         .unwrap()
         .as_any()
         .downcast_ref::<Rafs>()

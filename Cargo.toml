@@ -35,9 +35,13 @@ chrono = "0.4.19"
 storage = { path = "storage" }
 
 event-manager = { git = "https://github.com/rust-vmm/event-manager.git", tag = "v0.2.0" }
-fuse-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs.git", optional = true, rev = "cfd2cca" }
+fuse-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs.git", optional = true, rev = "8a5e609" }
+#fuse-rs = { path = "/home/zhaosheng.ste/fuse-backend-rs"}
 vhost-rs = { git = "https://github.com/cloud-hypervisor/vhost.git", branch = "dragonball", package = "vhost", optional = true }
-vhost-user-backend = { git = "https://github.com/cloud-hypervisor/vhost-user-backend.git", package = "vhost_user_backend", optional = true }
+#vhost-rs = { git = "https://github.com/rust-vmm/vhost", branch = "master", package = "vhost" }
+#vhost-user-backend = { git = "https://github.com/cloud-hypervisor/vhost-user-backend.git", package = "vhost_user_backend", optional = true, rev = "78757bf"}
+#vhost-user-backend = { git = "https://github.com/rust-vmm/vhost-user-backend", package = "vhost-user-backend", optional = true }
+vhost-user-backend = { path = "/home/zhaosheng.ste/vhost-user-backend", optional = true}
 
 [dev-dependencies]
 sendfd = "0.3.3"
@@ -55,3 +59,22 @@ virtiofs = [
 
 [workspace]
 members = ["utils", "rafs", "api", "storage"]
+
+[patch."https://github.com/cloud-hypervisor/fuse-backend-rs.git"]
+fuse-rs = { path = "/home/zhaosheng.ste/fuse-backend-rs" }
+
+[patch.crates-io]
+vm-memory = { git = "https://code.byted.org/data-system-ste/vm-memory.git", branch = "nydus-v1.0.0" }
+
+#[patch."https://github.com/rust-vmm/vm-virtio"]
+#vm-virtio = { path = "/home/zhaosheng.ste/vm-virtio", features = ["vhost-user"]}
+#vm-virtio = { git = "https://code.byted.org/data-system-ste/vm-virtio.git", branch = "nydus-v1.0.0" }
+
+#[patch."https://github.com/cloud-hypervisor/vm-virtio.git"]
+#vm-virtio = { path = "/home/zhaosheng.ste/vm-virtio", features = ["vhost-user"]}
+
+[patch."https://github.com/cloud-hypervisor/vhost.git"]
+vhost-rs = { git = "https://github.com/rust-vmm/vhost", package = "vhost", features = ["vhost-user-slave"], rev = "c1f77c7"}
+
+[patch."https://github.com/cloud-hypervisor/vhost-user-backend.git"]
+vhost-user-backend = { path = "/home/zhaosheng.ste/vhost-user-backend", optional = true}

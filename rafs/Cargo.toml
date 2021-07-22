@@ -34,8 +34,8 @@ vm-memory = ">=0.2.0"
 nydus-utils = { path = "../utils" }
 storage = { path = "../storage", features = ["backend-localfs"] }
 
-fuse-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs.git", rev = "cfd2cca" }
-
+#fuse-rs = { git = "https://github.com/cloud-hypervisor/fuse-backend-rs.git", rev = "8a5e609" }
+fuse-rs = { path = "/home/zhaosheng.ste/fuse-backend-rs"}
 
 [dev-dependencies]
 vmm-sys-util = "0.6.0"
